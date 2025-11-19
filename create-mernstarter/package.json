@@ -1,0 +1,27 @@
+{
+  "name": "create-mernstarter",
+  "version": "1.0.0",
+  "description": "CLI tool to generate a MERN starter project",
+  "main": "index.js",
+  "bin": {
+    "create-mernstarter": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "mern",
+    "boilerplate",
+    "cli",
+    "generator"
+  ],
+  "author": "MERN Starter",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^9.4.0",
+    "fs-extra": "^10.1.0",
+    "inquirer": "^8.2.4",
+    "ora": "^5.4.1"
+  }
+}

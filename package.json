@@ -1,0 +1,29 @@
+{
+  "name": "mern-boilerplate",
+  "version": "1.0.0",
+  "description": "Production-ready Master MERN Boilerplate",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "start": "concurrently \"npm start --prefix backend\" \"npm run build && npm start --prefix frontend\"",
+    "test": "concurrently \"npm test --prefix backend\" \"npm test --prefix frontend\"",
+    "lint": "concurrently \"npm run lint --prefix backend\" \"npm run lint --prefix frontend\"",
+    "build": "concurrently \"npm run build --prefix backend\" \"npm run build --prefix frontend\"",
+    "clean": "concurrently \"npm run clean --prefix backend\" \"npm run clean --prefix frontend\"",
+    "prepare": "husky install"
+  },
+  "keywords": [
+    "mern",
+    "boilerplate",
+    "mongodb",
+    "express",
+    "react",
+    "node"
+  ],
+  "author": "MERN Starter",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "husky": "^8.0.3"
+  }
+}
