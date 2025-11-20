@@ -1,8 +1,5 @@
-const Product = require('../models/Product');
+const supabase = require('../config/supabase');
 
-// @desc    Get all products with filtering, pagination, and sorting
-// @route   GET /api/products
-// @access  Public
 exports.getProducts = async (req, res, next) => {
   try {
     const {
@@ -13,45 +10,43 @@ exports.getProducts = async (req, res, next) => {
       featured,
       minPrice,
       maxPrice,
-      sortBy = 'createdAt',
+      sortBy = 'created_at',
       sortOrder = 'desc',
     } = req.query;
 
-    // Build query
-    const query = { active: true };
+    let query = supabase
+      .from('products')
+      .select('*, categories:category_id(id, name, description)', { count: 'exact' })
+      .eq('active', true);
 
     if (search) {
-      // Use regex for flexible search (partial matches)
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { code: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-      ];
+      query = query.or(`name.ilike.%${search}%,code.ilike.%${search}%,description.ilike.%${search}%`);
     }
 
     if (category) {
-      query.category = category;
+      query = query.eq('category_id', category);
     }
 
     if (featured !== undefined) {
-      query.featured = featured === 'true';
+      query = query.eq('featured', featured === 'true');
     }
 
-    if (minPrice || maxPrice) {
-      query.price = {};
-      if (minPrice) query.price.$gte = Number(minPrice);
-      if (maxPrice) query.price.$lte = Number(maxPrice);
+    if (minPrice) {
+      query = query.gte('price', Number(minPrice));
     }
 
-    // Execute query with pagination
-    const products = await Product.find(query)
-      .populate('category', 'name slug')
-      .sort({ [sortBy]: sortOrder === 'asc' ? 1 : -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit)
-      .lean();
+    if (maxPrice) {
+      query = query.lte('price', Number(maxPrice));
+    }
 
-    const count = await Product.countDocuments(query);
+    const offset = (page - 1) * limit;
+    query = query
+      .order(sortBy, { ascending: sortOrder === 'asc' })
+      .range(offset, offset + limit - 1);
+
+    const { data: products, count, error } = await query;
+
+    if (error) throw error;
 
     res.status(200).json({
       success: true,
@@ -68,19 +63,28 @@ exports.getProducts = async (req, res, next) => {
   }
 };
 
-// @desc    Get single product by ID or code
-// @route   GET /api/products/:idOrCode
-// @access  Public
 exports.getProduct = async (req, res, next) => {
   try {
     const { idOrCode } = req.params;
 
-    // Try to find by ID first, then by code
-    let product = await Product.findById(idOrCode).populate('category');
-    
+    let { data: product, error } = await supabase
+      .from('products')
+      .select('*, categories:category_id(id, name, description)')
+      .eq('id', idOrCode)
+      .maybeSingle();
+
     if (!product) {
-      product = await Product.findOne({ code: idOrCode }).populate('category');
+      const result = await supabase
+        .from('products')
+        .select('*, categories:category_id(id, name, description)')
+        .eq('code', idOrCode)
+        .maybeSingle();
+
+      product = result.data;
+      error = result.error;
     }
+
+    if (error) throw error;
 
     if (!product) {
       return res.status(404).json({
@@ -98,15 +102,11 @@ exports.getProduct = async (req, res, next) => {
   }
 };
 
-// @desc    Create new product (Admin only)
-// @route   POST /api/products
-// @access  Private/Admin
 exports.createProduct = async (req, res, next) => {
   try {
     console.log('Creating product with data:', req.body);
     console.log('Files received:', req.files?.length || 0);
 
-    // Parse JSON fields if they're strings
     if (typeof req.body.specifications === 'string') {
       req.body.specifications = JSON.parse(req.body.specifications);
     }
@@ -114,19 +114,40 @@ exports.createProduct = async (req, res, next) => {
       req.body.tags = JSON.parse(req.body.tags);
     }
 
-    // Handle file uploads
+    const productData = {
+      code: req.body.code,
+      name: req.body.name,
+      description: req.body.description,
+      specifications: req.body.specifications || {},
+      price: Number(req.body.price),
+      compare_price: req.body.compare_price ? Number(req.body.compare_price) : null,
+      stock: Number(req.body.stock || 0),
+      low_stock_threshold: Number(req.body.lowStockThreshold || 10),
+      category_id: req.body.category,
+      featured: req.body.featured === 'true' || req.body.featured === true,
+      active: req.body.active !== 'false' && req.body.active !== false,
+      tags: req.body.tags || [],
+      seo_title: req.body.seoTitle || null,
+      seo_description: req.body.seoDescription || null,
+      seo_keywords: req.body.seoKeywords || [],
+      images: [],
+    };
+
     if (req.files && req.files.length > 0) {
-      req.body.images = req.files.map((file, index) => ({
+      productData.images = req.files.map((file, index) => ({
         url: `/uploads/products/${file.filename}`,
         alt: req.body.name || `Product image ${index + 1}`,
         isPrimary: index === 0,
       }));
-    } else {
-      // Ensure images array exists even if no files uploaded
-      req.body.images = [];
     }
 
-    const product = await Product.create(req.body);
+    const { data: product, error } = await supabase
+      .from('products')
+      .insert(productData)
+      .select('*, categories:category_id(id, name, description)')
+      .single();
+
+    if (error) throw error;
 
     res.status(201).json({
       success: true,
@@ -134,37 +155,18 @@ exports.createProduct = async (req, res, next) => {
     });
   } catch (error) {
     console.error('Product creation error:', error);
-    if (error.name === 'ValidationError') {
-      const messages = Object.values(error.errors).map(err => err.message);
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: messages,
-      });
-    }
-    next(error);
+    res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to create product',
+    });
   }
 };
 
-// @desc    Update product (Admin only)
-// @route   PUT /api/products/:id
-// @access  Private/Admin
 exports.updateProduct = async (req, res, next) => {
   try {
     console.log('Updating product:', req.params.id);
     console.log('Update data:', req.body);
-    console.log('Files received:', req.files?.length || 0);
 
-    let product = await Product.findById(req.params.id);
-
-    if (!product) {
-      return res.status(404).json({
-        success: false,
-        message: 'Product not found',
-      });
-    }
-
-    // Parse JSON fields if they're strings
     if (typeof req.body.specifications === 'string') {
       req.body.specifications = JSON.parse(req.body.specifications);
     }
@@ -172,7 +174,6 @@ exports.updateProduct = async (req, res, next) => {
       req.body.tags = JSON.parse(req.body.tags);
     }
 
-    // Handle existing images
     let existingImages = [];
     if (req.body.existingImages) {
       if (typeof req.body.existingImages === 'string') {
@@ -182,29 +183,40 @@ exports.updateProduct = async (req, res, next) => {
       }
     }
 
-    // Handle new file uploads
+    const updateData = {
+      code: req.body.code,
+      name: req.body.name,
+      description: req.body.description,
+      specifications: req.body.specifications || {},
+      price: Number(req.body.price),
+      compare_price: req.body.compare_price ? Number(req.body.compare_price) : null,
+      stock: Number(req.body.stock || 0),
+      low_stock_threshold: Number(req.body.lowStockThreshold || 10),
+      category_id: req.body.category,
+      featured: req.body.featured === 'true' || req.body.featured === true,
+      active: req.body.active !== 'false' && req.body.active !== false,
+      tags: req.body.tags || [],
+    };
+
     if (req.files && req.files.length > 0) {
       const newImages = req.files.map((file, index) => ({
         url: `/uploads/products/${file.filename}`,
-        alt: req.body.name || product.name,
+        alt: req.body.name,
         isPrimary: existingImages.length === 0 && index === 0,
       }));
-
-      req.body.images = [...existingImages, ...newImages];
+      updateData.images = [...existingImages, ...newImages];
     } else if (existingImages.length > 0) {
-      req.body.images = existingImages;
-    } else {
-      // No existing images and no new files
-      req.body.images = [];
+      updateData.images = existingImages;
     }
 
-    // Remove the existingImages field before update
-    delete req.body.existingImages;
+    const { data: product, error } = await supabase
+      .from('products')
+      .update(updateData)
+      .eq('id', req.params.id)
+      .select('*, categories:category_id(id, name, description)')
+      .single();
 
-    product = await Product.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    if (error) throw error;
 
     res.status(200).json({
       success: true,
@@ -212,33 +224,21 @@ exports.updateProduct = async (req, res, next) => {
     });
   } catch (error) {
     console.error('Product update error:', error);
-    if (error.name === 'ValidationError') {
-      const messages = Object.values(error.errors).map(err => err.message);
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: messages,
-      });
-    }
-    next(error);
+    res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to update product',
+    });
   }
 };
 
-// @desc    Delete product (Admin only)
-// @route   DELETE /api/products/:id
-// @access  Private/Admin
 exports.deleteProduct = async (req, res, next) => {
   try {
-    const product = await Product.findById(req.params.id);
+    const { error } = await supabase
+      .from('products')
+      .delete()
+      .eq('id', req.params.id);
 
-    if (!product) {
-      return res.status(404).json({
-        success: false,
-        message: 'Product not found',
-      });
-    }
-
-    await product.remove();
+    if (error) throw error;
 
     res.status(200).json({
       success: true,
@@ -249,18 +249,19 @@ exports.deleteProduct = async (req, res, next) => {
   }
 };
 
-// @desc    Get featured products
-// @route   GET /api/products/featured
-// @access  Public
 exports.getFeaturedProducts = async (req, res, next) => {
   try {
     const limit = req.query.limit || 10;
 
-    const products = await Product.find({ featured: true, active: true })
-      .populate('category', 'name slug')
-      .limit(Number(limit))
-      .sort({ createdAt: -1 })
-      .lean();
+    const { data: products, error } = await supabase
+      .from('products')
+      .select('*, categories:category_id(id, name, description)')
+      .eq('featured', true)
+      .eq('active', true)
+      .order('created_at', { ascending: false })
+      .limit(Number(limit));
+
+    if (error) throw error;
 
     res.status(200).json({
       success: true,
@@ -271,16 +272,17 @@ exports.getFeaturedProducts = async (req, res, next) => {
   }
 };
 
-// @desc    Get low stock products (Admin only)
-// @route   GET /api/products/low-stock
-// @access  Private/Admin
 exports.getLowStockProducts = async (req, res, next) => {
   try {
-    const products = await Product.find({ active: true })
-      .populate('category', 'name slug')
-      .lean();
+    const { data: products, error } = await supabase
+      .from('products')
+      .select('*, categories:category_id(id, name, description)')
+      .eq('active', true)
+      .order('stock', { ascending: true });
 
-    const lowStockProducts = products.filter((product) => product.stock <= product.lowStockThreshold);
+    if (error) throw error;
+
+    const lowStockProducts = products.filter(p => p.stock <= p.low_stock_threshold);
 
     res.status(200).json({
       success: true,
@@ -291,9 +293,6 @@ exports.getLowStockProducts = async (req, res, next) => {
   }
 };
 
-// @desc    Bulk import products (Admin only)
-// @route   POST /api/products/bulk-import
-// @access  Private/Admin
 exports.bulkImportProducts = async (req, res, next) => {
   try {
     const { products } = req.body;
@@ -305,29 +304,30 @@ exports.bulkImportProducts = async (req, res, next) => {
       });
     }
 
-    const importedProducts = await Product.insertMany(products, {
-      ordered: false,
-      rawResult: true,
-    });
+    const { data, error } = await supabase
+      .from('products')
+      .insert(products)
+      .select();
+
+    if (error) throw error;
 
     res.status(201).json({
       success: true,
-      data: importedProducts,
-      message: `${importedProducts.insertedCount} products imported successfully`,
+      data,
+      message: `${data.length} products imported successfully`,
     });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Export products (Admin only)
-// @route   GET /api/products/export
-// @access  Private/Admin
 exports.exportProducts = async (req, res, next) => {
   try {
-    const products = await Product.find()
-      .populate('category', 'name slug')
-      .lean();
+    const { data: products, error } = await supabase
+      .from('products')
+      .select('*, categories:category_id(id, name, description)');
+
+    if (error) throw error;
 
     res.status(200).json({
       success: true,

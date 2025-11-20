@@ -1,27 +1,28 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const bcrypt = require('bcryptjs');
+const supabase = require('../config/supabase');
 const {
   handleValidationErrors,
   registerValidationRules,
   loginValidationRules,
 } = require('../middleware/validation');
 
-// Generate JWT token
 const generateToken = (userId) => {
   return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRE,
   });
 };
 
-// @desc    Register user
-// @route   POST /api/auth/register
-// @access  Public
 exports.register = async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email)
+      .maybeSingle();
+
     if (existingUser) {
       return res.status(400).json({
         success: false,
@@ -29,22 +30,29 @@ exports.register = async (req, res, next) => {
       });
     }
 
-    // Create user
-    const user = await User.create({
-      name,
-      email,
-      password,
-    });
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Generate token
-    const token = generateToken(user._id);
+    const { data: user, error } = await supabase
+      .from('users')
+      .insert({
+        name,
+        email,
+        password: hashedPassword,
+        role: 'user',
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    const token = generateToken(user.id);
 
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
       token,
       user: {
-        id: user._id,
+        id: user.id,
         name: user.name,
         email: user.email,
         role: user.role,
@@ -55,14 +63,10 @@ exports.register = async (req, res, next) => {
   }
 };
 
-// @desc    Login user
-// @route   POST /api/auth/login
-// @access  Public
 exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
-    // Validate email and password
     if (!email || !password) {
       return res.status(400).json({
         success: false,
@@ -70,17 +74,21 @@ exports.login = async (req, res, next) => {
       });
     }
 
-    // Check for user
-    const user = await User.findOne({ email }).select('+password');
-    if (!user) {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (error || !user) {
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
       });
     }
 
-    // Check password
-    const isMatch = await user.matchPassword(password);
+    const isMatch = await bcrypt.compare(password, user.password);
+
     if (!isMatch) {
       return res.status(401).json({
         success: false,
@@ -88,15 +96,14 @@ exports.login = async (req, res, next) => {
       });
     }
 
-    // Generate token
-    const token = generateToken(user._id);
+    const token = generateToken(user.id);
 
     res.status(200).json({
       success: true,
       message: 'User logged in successfully',
       token,
       user: {
-        id: user._id,
+        id: user.id,
         name: user.name,
         email: user.email,
         role: user.role,
@@ -107,66 +114,69 @@ exports.login = async (req, res, next) => {
   }
 };
 
-// @desc    Get current user
-// @route   GET /api/auth/profile
-// @access  Private
 exports.getProfile = async (req, res, next) => {
   try {
-    const user = await User.findById(req.user.id);
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, name, email, role, phone, address, profile_image')
+      .eq('id', req.user.id)
+      .maybeSingle();
 
-    res.status(200).json({
-      success: true,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        phone: user.phone,
-        address: user.address,
-        profileImage: user.profileImage,
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// @desc    Update user profile
-// @route   PUT /api/auth/profile
-// @access  Private
-exports.updateProfile = async (req, res, next) => {
-  try {
-    const { name, email, phone, address, profileImage } = req.body;
-
-    const user = await User.findById(req.user.id);
-
-    if (!user) {
+    if (error || !user) {
       return res.status(404).json({
         success: false,
         message: 'User not found',
       });
     }
 
-    // Update fields if provided
-    if (name) user.name = name;
-    if (email) user.email = email;
-    if (phone !== undefined) user.phone = phone;
-    if (address !== undefined) user.address = address;
-    if (profileImage !== undefined) user.profileImage = profileImage;
-
-    await user.save();
-
     res.status(200).json({
       success: true,
-      message: 'Profile updated successfully',
       user: {
-        id: user._id,
+        id: user.id,
         name: user.name,
         email: user.email,
         role: user.role,
         phone: user.phone,
         address: user.address,
-        profileImage: user.profileImage,
+        profileImage: user.profile_image,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.updateProfile = async (req, res, next) => {
+  try {
+    const { name, email, phone, address, profileImage } = req.body;
+
+    const updateData = {};
+    if (name) updateData.name = name;
+    if (email) updateData.email = email;
+    if (phone !== undefined) updateData.phone = phone;
+    if (address !== undefined) updateData.address = address;
+    if (profileImage !== undefined) updateData.profile_image = profileImage;
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .update(updateData)
+      .eq('id', req.user.id)
+      .select('id, name, email, role, phone, address, profile_image')
+      .single();
+
+    if (error) throw error;
+
+    res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        phone: user.phone,
+        address: user.address,
+        profileImage: user.profile_image,
       },
     });
   } catch (error) {
@@ -175,7 +185,6 @@ exports.updateProfile = async (req, res, next) => {
   }
 };
 
-// Validation rules
 exports.registerValidation = registerValidationRules();
 exports.loginValidation = loginValidationRules();
 exports.validate = handleValidationErrors;

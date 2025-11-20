@@ -1,14 +1,14 @@
-const Category = require('../models/Category');
+const supabase = require('../config/supabase');
 
-// @desc    Get all categories
-// @route   GET /api/categories
-// @access  Public
 exports.getCategories = async (req, res, next) => {
   try {
-    const categories = await Category.find({ active: true })
-      .populate('parent', 'name slug')
-      .sort({ order: 1, name: 1 })
-      .lean();
+    const { data: categories, error } = await supabase
+      .from('categories')
+      .select('*')
+      .eq('active', true)
+      .order('name', { ascending: true });
+
+    if (error) throw error;
 
     res.status(200).json({
       success: true,
@@ -19,12 +19,15 @@ exports.getCategories = async (req, res, next) => {
   }
 };
 
-// @desc    Get single category
-// @route   GET /api/categories/:id
-// @access  Public
 exports.getCategory = async (req, res, next) => {
   try {
-    const category = await Category.findById(req.params.id).populate('parent');
+    const { data: category, error } = await supabase
+      .from('categories')
+      .select('*')
+      .eq('id', req.params.id)
+      .maybeSingle();
+
+    if (error) throw error;
 
     if (!category) {
       return res.status(404).json({
@@ -42,19 +45,25 @@ exports.getCategory = async (req, res, next) => {
   }
 };
 
-// @desc    Create category (Admin only)
-// @route   POST /api/categories
-// @access  Private/Admin
 exports.createCategory = async (req, res, next) => {
   try {
+    const categoryData = {
+      name: req.body.name,
+      description: req.body.description || null,
+      active: req.body.active !== 'false' && req.body.active !== false,
+    };
+
     if (req.file) {
-      req.body.image = {
-        url: `/uploads/products/${req.file.filename}`,
-        alt: req.body.name,
-      };
+      categoryData.image = `/uploads/products/${req.file.filename}`;
     }
 
-    const category = await Category.create(req.body);
+    const { data: category, error } = await supabase
+      .from('categories')
+      .insert(categoryData)
+      .select()
+      .single();
+
+    if (error) throw error;
 
     res.status(201).json({
       success: true,
@@ -65,22 +74,26 @@ exports.createCategory = async (req, res, next) => {
   }
 };
 
-// @desc    Update category (Admin only)
-// @route   PUT /api/categories/:id
-// @access  Private/Admin
 exports.updateCategory = async (req, res, next) => {
   try {
+    const updateData = {
+      name: req.body.name,
+      description: req.body.description || null,
+      active: req.body.active !== 'false' && req.body.active !== false,
+    };
+
     if (req.file) {
-      req.body.image = {
-        url: `/uploads/products/${req.file.filename}`,
-        alt: req.body.name,
-      };
+      updateData.image = `/uploads/products/${req.file.filename}`;
     }
 
-    const category = await Category.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    const { data: category, error } = await supabase
+      .from('categories')
+      .update(updateData)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) throw error;
 
     if (!category) {
       return res.status(404).json({
@@ -98,21 +111,14 @@ exports.updateCategory = async (req, res, next) => {
   }
 };
 
-// @desc    Delete category (Admin only)
-// @route   DELETE /api/categories/:id
-// @access  Private/Admin
 exports.deleteCategory = async (req, res, next) => {
   try {
-    const category = await Category.findById(req.params.id);
+    const { error } = await supabase
+      .from('categories')
+      .delete()
+      .eq('id', req.params.id);
 
-    if (!category) {
-      return res.status(404).json({
-        success: false,
-        message: 'Category not found',
-      });
-    }
-
-    await category.remove();
+    if (error) throw error;
 
     res.status(200).json({
       success: true,

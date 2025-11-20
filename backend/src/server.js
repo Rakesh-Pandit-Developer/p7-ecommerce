@@ -2,31 +2,14 @@ const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const helmet = require('helmet');
-const mongoose = require('mongoose');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 
-// Load environment variables
 dotenv.config();
 
-// Create Express app
 const app = express();
 
-// Connect to MongoDB
-if (process.env.MONGO_URI) {
-  mongoose
-    .connect(process.env.MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    })
-    .then(() => console.log('MongoDB connected'))
-    .catch((err) => {
-      console.error('MongoDB connection error:', err);
-      console.log('Continuing without database connection...');
-    });
-} else {
-  console.log('No MONGO_URI provided, running without database...');
-}
+console.log('Using Supabase database...');
 
 // Import routes
 const authRoutes = require('./routes/auth');
